@@ -277,55 +277,50 @@ async def predict(request: GraspPredictionRequest):
     Returns:
         GraspPredictionResponse with predicted grasps
     """
-    try:
-        # Convert input to tensors
-        xyz = torch.tensor(request.pointcloud.points, dtype=torch.float32)
+    # Convert input to tensors
+    xyz = torch.tensor(request.pointcloud.points, dtype=torch.float32)
 
-        if xyz.shape[1] != 3:
+    if xyz.shape[1] != 3:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Point cloud must have shape (N, 3), got {xyz.shape}"
+        )
+
+    rgb = None
+    if request.pointcloud.rgb is not None:
+        rgb = torch.tensor(request.pointcloud.rgb, dtype=torch.float32)
+        if rgb.shape != xyz.shape:
             raise HTTPException(
                 status_code=400,
-                detail=f"Point cloud must have shape (N, 3), got {xyz.shape}"
+                detail=f"RGB shape {rgb.shape} must match points shape {xyz.shape}"
             )
 
-        rgb = None
-        if request.pointcloud.rgb is not None:
-            rgb = torch.tensor(request.pointcloud.rgb, dtype=torch.float32)
-            if rgb.shape != xyz.shape:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"RGB shape {rgb.shape} must match points shape {xyz.shape}"
-                )
+    print(f"Received point cloud with {xyz.shape[0]} points")
 
-        print(f"Received point cloud with {xyz.shape[0]} points")
+    # Run prediction
+    outputs, num_points_processed = predict_grasps_from_pointcloud(
+        xyz=xyz,
+        rgb=rgb,
+        num_points=request.num_points,
+        num_runs=request.num_runs,
+        mask_thresh=request.mask_thresh,
+        apply_bounds=request.apply_bounds
+    )
 
-        # Run prediction
-        outputs, num_points_processed = predict_grasps_from_pointcloud(
-            xyz=xyz,
-            rgb=rgb,
-            num_points=request.num_points,
-            num_runs=request.num_runs,
-            mask_thresh=request.mask_thresh,
-            apply_bounds=request.apply_bounds
-        )
+    # Convert outputs to lists for JSON serialization
+    total_grasps = sum(len(g) for g in outputs['grasps'])
 
-        # Convert outputs to lists for JSON serialization
-        total_grasps = sum(len(g) for g in outputs['grasps'])
+    response = GraspPredictionResponse(
+        num_grasps=total_grasps,
+        grasps=[g.numpy().tolist() for g in outputs['grasps']],
+        grasp_confidence=[c.numpy().tolist() for c in outputs['grasp_confidence']],
+        grasp_contacts=[c.numpy().tolist() for c in outputs['grasp_contacts']],
+        num_points_processed=num_points_processed
+    )
 
-        response = GraspPredictionResponse(
-            num_grasps=total_grasps,
-            grasps=[g.numpy().tolist() for g in outputs['grasps']],
-            grasp_confidence=[c.numpy().tolist() for c in outputs['grasp_confidence']],
-            grasp_contacts=[c.numpy().tolist() for c in outputs['grasp_contacts']],
-            num_points_processed=num_points_processed
-        )
+    print(f"Predicted {total_grasps} grasps from {num_points_processed} points")
 
-        print(f"Predicted {total_grasps} grasps from {num_points_processed} points")
-
-        return response
-
-    except Exception as e:
-        print(f"Error during prediction: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return response
 
 
 def main():
